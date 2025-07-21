@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>File Generation Result</title>
+    <!-- Tailwind CSS CDN for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts - Inter for a modern look -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        /* Custom CSS for Instagram-like aesthetics and responsiveness */
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f0f2f5;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 1rem; /* Add some padding for smaller screens */
+            box-sizing: border-box;
+        }
+        .container {
+            background-color: #ffffff;
+            border-radius: 1.5rem;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+            padding: 2.5rem;
+            width: 100%;
+            max-width: 480px;
+            text-align: center;
+            box-sizing: border-box;
+        }
+        h1 {
+            color: #262626;
+            margin-bottom: 2rem;
+            font-weight: 700;
+        }
+        p {
+            color: #525252;
+            font-size: 1.1rem;
+            margin-bottom: 1.5rem;
+        }
+        .button-group {
+            display: flex;
+            flex-direction: column; /* Stack buttons vertically on small screens */
+            gap: 1rem; /* Space between buttons */
+            margin-top: 2rem;
+        }
+        .button-group a, .button-group button {
+            display: block; /* Make links behave like block elements */
+            width: 100%;
+            padding: 1rem 1.5rem;
+            border: none;
+            border-radius: 1.5rem;
+            font-size: 1.125rem;
+            font-weight: 700;
+            cursor: pointer;
+            transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
+            text-decoration: none; /* Remove underline from links */
+            box-sizing: border-box; /* Ensure padding is included in width */
+        }
+        .download-button {
+            background: linear-gradient(to right, #4c66ee, #3b5998, #36a4e0); /* Instagram-like gradient */
+            color: white;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+        }
+        .refresh-button {
+            background-color: #e0e0e0; /* Lighter grey for refresh */
+            color: #333;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+        }
+        .button-group a:hover, .button-group button:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.3);
+        }
+        .message {
+            margin-top: 1.5rem;
+            padding: 0.75rem 1rem;
+            border-radius: 0.75rem;
+            font-size: 0.95rem;
+            font-weight: 600;
+        }
+        .message.error {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        /* Responsive adjustments for button group */
+        @media (min-width: 640px) {
+            .button-group {
+                flex-direction: row; /* Arrange buttons horizontally on larger screens */
+            }
+            .button-group a, .button-group button {
+                width: auto; /* Allow buttons to size content */
+                flex-grow: 1; /* Distribute space evenly */
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="text-3xl">File Generation Complete!</h1>
+
+        <!-- Dynamic content placeholders -->
+        [[${result_content_html}]]
+    </div>
+</body>
+</html>
