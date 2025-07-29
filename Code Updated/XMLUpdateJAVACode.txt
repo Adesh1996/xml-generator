@@ -200,13 +200,10 @@ public class PainXmlUpdater {
         String newFileName = "INST" + originalFileName;
         Path newFilePath = Paths.get(xmlFile.getParent(), newFileName);
 
-        try (StreamResult result = new StreamResult(newFilePath.toFile())) {
-            transformer.transform(source, result);
-            System.out.println("Successfully updated and saved file to: " + newFilePath.toAbsolutePath());
-        } catch (TransformerException e) {
-            System.err.println("  Error saving modified file " + newFilePath.toAbsolutePath() + ": " + e.getMessage());
-            throw e; // Re-throw to be caught by the outer loop
-        }
+        // CORRECTED: Removed try-with-resources for StreamResult
+        StreamResult result = new StreamResult(newFilePath.toFile());
+        transformer.transform(source, result);
+        System.out.println("Successfully updated and saved file to: " + newFilePath.toAbsolutePath());
 
 
         // Optional: Delete original file. Use with caution!
