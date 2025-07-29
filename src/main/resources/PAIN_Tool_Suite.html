@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>PAIN Tool Suite</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet" />
+  <style>
+    body {
+      font-family: 'Inter', sans-serif;
+      background-color: #f9fafb;
+    }
+  </style>
+</head>
+<body class="min-h-screen flex items-center justify-center p-4">
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-6 w-full max-w-6xl">
+
+    <!-- PAIN File Generator Panel -->
+    <div class="bg-white shadow-lg rounded-xl p-6 space-y-4">
+      <h2 class="text-lg font-semibold text-blue-800">PAIN File Generator</h2>
+      <form id="generationForm" method="POST" action="/generate" enctype="multipart/form-data" onsubmit="showLoading()" class="space-y-3 text-left">
+        <div>
+          <label class="block text-sm font-medium text-gray-600 mb-1">Template XML File</label>
+          <input type="file" name="templateFile" accept=".xml,.txt" required class="w-full border px-2 py-1.5 rounded text-sm" />
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-600 mb-1">No. of Transactions</label>
+          <input type="number" name="numTransactions" min="1" value="1" required class="w-full border px-2 py-1.5 rounded text-sm" />
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-600 mb-1">No. of Batches</label>
+          <input type="number" name="numBatches" min="1" value="1" required class="w-full border px-2 py-1.5 rounded text-sm" />
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-600 mb-1">No. of Copies</label>
+          <input type="number" name="numCopies" min="1" value="1" required class="w-full border px-2 py-1.5 rounded text-sm" />
+        </div>
+        <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold py-2 rounded">Generate</button>
+      </form>
+    </div>
+
+    <!-- XML to Excel Converter Panel (Folder Input accepting .xml and .txt) -->
+    <div class="bg-white shadow-lg rounded-xl p-6 space-y-4">
+      <h2 class="text-lg font-semibold text-green-800">XML to Excel Converter</h2>
+      <form id="convertForm" method="POST" action="/convert" enctype="multipart/form-data" onsubmit="showLoading()" class="space-y-3 text-left">
+        <div>
+          <label class="block text-sm font-medium text-gray-600 mb-1">Upload Folder with XML/TXT Files</label>
+          <input type="file"
+                 name="xmlFiles"
+                 webkitdirectory
+                 directory
+                 multiple
+                 accept=".xml,.txt"
+                 required
+                 class="w-full border px-2 py-1.5 rounded text-sm" />
+        </div>
+        <button type="submit"
+                class="w-full bg-green-600 hover:bg-green-700 text-white text-sm font-semibold py-2 rounded">
+          Convert
+        </button>
+      </form>
+    </div>
+
+  </div>
+
+  <!-- Loading Overlay -->
+  <div id="loadingOverlay" class="fixed inset-0 bg-white bg-opacity-80 flex flex-col items-center justify-center z-50 hidden">
+    <div class="border-t-4 border-blue-500 border-solid rounded-full w-10 h-10 animate-spin mb-2"></div>
+    <span class="text-sm font-medium text-gray-700">Processing, please wait...</span>
+  </div>
+
+  <script>
+    function showLoading() {
+      document.getElementById('loadingOverlay').style.display = 'flex';
+    }
+  </script>
+</body>
+</html>

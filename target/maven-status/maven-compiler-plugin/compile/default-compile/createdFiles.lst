@@ -1,3 +1,6 @@
 com\example\xmlgenerator\service\XmlProcessorService$1.class
-com\example\xmlgenerator\XmlGeneratorApplication.class
 com\example\xmlgenerator\service\XmlProcessorService.class
+com\example\xmlgenerator\service\GenerationResult.class
+com\example\xmlgenerator\XmlGeneratorApplication.class
+com\example\xmlgenerator\service\GeneratedFile.class
+com\example\xmlgenerator\XmlGeneratorApplication$1.class

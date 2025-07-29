@@ -3,21 +3,22 @@
 package com.example.xmlgenerator;
 
 import com.example.xmlgenerator.service.XmlProcessorService;
+import com.example.xmlgenerator.service.GeneratedFile;
+import com.example.xmlgenerator.service.GenerationResult;
 import fi.iki.elonen.NanoHTTPD;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
-import java.io.File;
-import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Properties;
+import java.io.FileInputStream;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.UUID; // For generating unique IDs for cached files
+import java.util.concurrent.ConcurrentHashMap; // For in-memory caching
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -27,13 +28,24 @@ import java.util.zip.ZipOutputStream;
  */
 public class XmlGeneratorApplication extends NanoHTTPD {
 
+
+
     // --- PORT MODIFICATION ---
     // Change this value to your desired port number.
     private static final int PORT = 9090; // Port for the HTTP server
     // --- END PORT MODIFICATION ---
 
-    private static final String GENERATED_FILES_DIR = "generated_files"; // Directory for generated files
     private final XmlProcessorService xmlProcessorService; // Service for XML processing
+
+    // Date format for ZIP file naming convention: YYYYMMDDHHmmss
+    private static final SimpleDateFormat ZIP_FILE_TIMESTAMP_FORMAT = new SimpleDateFormat("yyyyMMddHHmmss");
+
+    // In-memory cache for generated ZIP files.
+    // Key: Unique ID (UUID), Value: byte array of the zipped content.
+    private final ConcurrentHashMap<String, byte[]> generatedZipCache = new ConcurrentHashMap<>();
+    // In-memory cache for ZIP file names, associated with the unique ID.
+    private final ConcurrentHashMap<String, String> generatedZipNames = new ConcurrentHashMap<>();
+
 
     /**
      * Constructor for XmlGeneratorApplication.
@@ -41,252 +53,262 @@ public class XmlGeneratorApplication extends NanoHTTPD {
      * @throws IOException If the server cannot be started.
      */
     public XmlGeneratorApplication() throws IOException {
-        super(PORT); // Call NanoHTTPD constructor with the port
-        this.xmlProcessorService = new XmlProcessorService(); // Initialize the XML processing service
-        // Start the HTTP server
-        start(NanoHTTPD.SOCKET_READ_TIMEOUT, false);
-        System.out.println("NanoHTTPD server started on port " + PORT);
-
-        // Ensure the generated files directory exists
-        try {
-            Files.createDirectories(Paths.get(GENERATED_FILES_DIR));
-        } catch (IOException e) {
-            System.err.println("Error creating generated files directory: " + e.getMessage());
-        }
+        super(PORT); // Call the superclass constructor with the port number.
+        this.xmlProcessorService = new XmlProcessorService(); // Initialize the XML processor service.
+        start(NanoHTTPD.SOCKET_READ_TIMEOUT, false); // Start the server.
+        System.out.println("Server started on port " + PORT + ". Access http://localhost:" + PORT);
     }
 
     /**
-     * Main method to start the application.
+     * Main method to start the XML Generator application.
      * @param args Command line arguments (not used).
      */
     public static void main(String[] args) {
         try {
-            new XmlGeneratorApplication(); // Create and start the application instance
+            new XmlGeneratorApplication(); // Create and start a new instance of the application.
         } catch (IOException e) {
-            System.err.println("Could not start server: " + e.getMessage());
-            e.printStackTrace();
+            System.err.println("Could not start server: " + e.getMessage()); // Log any errors during server startup.
         }
     }
 
     /**
-     * Overrides the serve method from NanoHTTPD to handle incoming HTTP requests.
-     * This method acts as the central router for all web requests.
+     * Handles HTTP requests. This is the core method of NanoHTTPD where all incoming requests are processed.
+     * It routes requests to appropriate handler methods based on the URI.
+     *
      * @param session The HTTP session containing request details.
-     * @return A NanoHTTPD.Response object containing the HTTP response.
+     * @return A NanoHTTPD.Response object representing the HTTP response.
      */
     @Override
     public Response serve(IHTTPSession session) {
-        String uri = session.getUri(); // Get the requested URI
         Method method = session.getMethod(); // Get the HTTP method (GET, POST, etc.)
+        String uri = session.getUri(); // Get the requested URI
 
-        // Handle GET requests for static files and initial page load
-        if (Method.GET.equals(method)) {
-            if ("/".equals(uri) || "/index.html".equals(uri)) {
-                // Serve the index.html page
-                return serveHtmlFile("templates/index.html", null); // No dynamic content on initial load
-            } else if ("/result.html".equals(uri)) {
-                // Serve the result.html page (should generally be reached via POST redirect)
-                // This path is mainly for direct refresh, so no dynamic content is passed by default.
-                return serveHtmlFile("templates/result.html", null); // No dynamic content on direct refresh
-            } else if ("/download".equals(uri)) {
-                // Handle file download request
-                return handleDownloadRequest();
+        System.out.println(method + " '" + uri + "'"); // Log the incoming request
+
+        try {
+            // Route requests based on URI and method
+            if (Method.GET.equals(method)) {
+                if ("/".equals(uri) || "/index.html".equals(uri)) {
+                    return handleIndexPage(); // Serve the main HTML page
+                } else if ("/result.html".equals(uri)) {
+                    // Serve the result page. It will use client-side JS to get download link.
+                    return serveStaticFile("/result.html");
+                } else if (uri.startsWith("/download-generated-files")) {
+                    // New endpoint to handle actual file download from cache
+                    return handleDownloadRequest(session);
+                }
+                else {
+                    // Serve other static files (CSS, JS, images)
+                    return serveStaticFile(uri);
+                }
+            } else if (Method.POST.equals(method) && "/generate".equals(uri)) {
+                return handleGenerateRequest(session); // Handle XML file generation request
             }
-        } else if (Method.POST.equals(method) && "/generate".equals(uri)) {
-            // Handle POST request for file generation
-            return handleGenerateRequest(session);
+        } catch (Exception e) {
+            System.err.println("Server error: " + e.getMessage());
+            e.printStackTrace();
+            // Return an internal server error response if an unexpected exception occurs.
+            return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, MIME_PLAINTEXT, "Server error: " + e.getMessage());
         }
 
-        // Return a 404 Not Found response for any unhandled URIs
-        return newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "404 Not Found");
+        // Default response for unhandled requests
+        return newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Not Found");
     }
 
     /**
-     * Serves an HTML file from the resources directory.
-     * @param filePath The path to the HTML file within resources (e.g., "templates/index.html").
-     * @param dynamicData A map of data to inject into the HTML (e.g., "message", "timeTaken", "errorMessage").
-     * @return A NanoHTTPD.Response object with the HTML content.
+     * Serves the main index.html page.
+     *
+     * @return A NanoHTTPD.Response object for the index page.
      */
-    private Response serveHtmlFile(String filePath, Map<String, String> dynamicData) {
+    private Response handleIndexPage() {
         try {
-            InputStream inputStream = getClass().getResourceAsStream("/" + filePath);
+            // Read the index.html file from the classpath (resources folder).
+            InputStream inputStream = getClass().getResourceAsStream("/index.html");
             if (inputStream == null) {
-                System.err.println("Error: HTML template not found: " + filePath);
-                return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, MIME_PLAINTEXT, "Internal Server Error: Template not found.");
+                // If the file is not found, return a 404 Not Found response.
+                return newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "index.html not found.");
             }
-
-            String htmlContent = readInputStreamToString(inputStream);
-
-            // Process dynamic content for index.html
-            if ("templates/index.html".equals(filePath)) {
-                String messageHtml = "";
-                if (dynamicData != null && dynamicData.containsKey("message")) {
-                    String message = dynamicData.get("message");
-                    boolean isSuccess = "true".equals(dynamicData.get("isSuccess"));
-                    String messageClass = isSuccess ? "success" : "error";
-                    messageHtml = "<div class=\"message " + messageClass + "\"><p>" + message + "</p></div>";
-                }
-                htmlContent = htmlContent.replace("[[${message_html}]]", messageHtml);
-            }
-            // Process dynamic content for result.html
-            else if ("templates/result.html".equals(filePath)) {
-                String resultContentHtml = "";
-                if (dynamicData != null && dynamicData.containsKey("errorMessage")) {
-                    resultContentHtml = "<div class=\"message error\"><p>" + dynamicData.get("errorMessage") + "</p></div>";
-                } else if (dynamicData != null && dynamicData.containsKey("timeTaken")) {
-                    String timeTaken = dynamicData.get("timeTaken");
-                    resultContentHtml =
-                        "<p>Time taken: " + timeTaken + " ms</p>" +
-                        "<p>Your files are ready for download.</p>" +
-                        "<div class=\"button-group\">" +
-                        "<a href=\"/download\" class=\"download-button\">Download Now</a>" +
-                        "<a href=\"/\" class=\"refresh-button\">Refresh</a>" +
-                        "</div>";
-                }
-                htmlContent = htmlContent.replace("[[${result_content_html}]]", resultContentHtml);
-                System.out.println("DEBUG: Result HTML content generated:\n" + htmlContent.substring(0, Math.min(htmlContent.length(), 500)) + "..."); // Print first 500 chars
-            }
-
-            return newFixedLengthResponse(Response.Status.OK, MIME_HTML, htmlContent);
+            // Return a new response with the content of index.html and appropriate MIME type.
+            return newFixedLengthResponse(Response.Status.OK, "text/html", inputStream, inputStream.available());
         } catch (IOException e) {
-            System.err.println("Error reading HTML file: " + e.getMessage());
+            System.err.println("Error serving index.html: " + e.getMessage());
             e.printStackTrace();
-            return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, MIME_PLAINTEXT, "Internal Server Error");
+            // Return an internal server error response if an I/O error occurs.
+            return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, MIME_PLAINTEXT, "Error loading index.html.");
         }
     }
 
     /**
-     * Reads the content of an InputStream into a String.
-     * @param inputStream The InputStream to read.
-     * @return The content of the InputStream as a String.
-     * @throws IOException If an I/O error occurs.
+     * Serves static files (e.g., CSS, JavaScript, images) from the classpath.
+     *
+     * @param uri The URI of the requested static file.
+     * @return A NanoHTTPD.Response object for the static file.
      */
-    private String readInputStreamToString(InputStream inputStream) throws IOException {
-        ByteArrayOutputStream result = new ByteArrayOutputStream();
-        byte[] buffer = new byte[1024];
-        int length;
-        while ((length = inputStream.read(buffer)) != -1) {
-            result.write(buffer, 0, length);
-        }
-        return result.toString("UTF-8"); // Specify UTF-8 encoding
-    }
-
-    /**
-     * Handles the POST request for file generation.
-     * Parses the multipart form data, calls the XML processing service, and redirects to the result page.
-     * @param session The HTTP session.
-     * @return A NanoHTTPD.Response object, typically a redirect or an error page.
-     */
-  public Response handleGenerateRequest(IHTTPSession session) {
-    long startTime = System.currentTimeMillis();
-    Map<String, String> files = new HashMap<String, String>();
-
-    try {
-        session.parseBody(files);
-        Map<String, List<String>> parameters = session.getParameters();
-
-        String numTransactionsStr = parameters.get("numTransactions").get(0);
-        String numBatchesStr = parameters.get("numBatches").get(0);
-        String numCopiesStr = parameters.get("numCopies").get(0);
-
-        int numTransactions = Integer.parseInt(numTransactionsStr);
-        int numBatches = Integer.parseInt(numBatchesStr);
-        int numCopies = Integer.parseInt(numCopiesStr);
-
-        String templateFileTempPath = files.get("templateFile");
-        System.out.println("DEBUG: templateFileTempPath received: " + templateFileTempPath);
-
-        if (templateFileTempPath == null || templateFileTempPath.isEmpty()) {
-            return serveHtmlFile("templates/index.html", createMessageMap("message", "Please upload a template XML file.", false));
-        }
-
-        if (numTransactions <= 0 || numBatches <= 0 || numCopies <= 0) {
-            return serveHtmlFile("templates/index.html", createMessageMap("message", "Number of transactions, batches, and copies must be positive.", false));
-        }
-
-        InputStream templateInputStream = new FileInputStream(templateFileTempPath);
-
-        xmlProcessorService.cleanupGeneratedFiles(GENERATED_FILES_DIR);
-        xmlProcessorService.generateXmlFiles(templateInputStream, numTransactions, numBatches, numCopies, GENERATED_FILES_DIR);
-
-        long endTime = System.currentTimeMillis();
-        Map<String, String> resultParams = new HashMap<>();
-        resultParams.put("timeTaken", String.valueOf(endTime - startTime));
-        return serveHtmlFile("templates/result.html", resultParams);
-
-    } catch (NumberFormatException e) {
-        System.err.println("Error parsing number: " + e.getMessage());
-        return serveHtmlFile("templates/index.html", createMessageMap("message", "Invalid number format for transactions, batches, or copies.", false));
-    } catch (Exception e) {
-        System.err.println("Error during file generation: " + e.getMessage());
-        e.printStackTrace();
-        Map<String, String> data = new HashMap<String, String>();
-        data.put("errorMessage", "Error generating files: " + e.getMessage());
-        return serveHtmlFile("templates/result.html", data);
-    } finally {
-        String templateFileTempPath = files.get("templateFile");
-        if (templateFileTempPath != null) {
-            new File(templateFileTempPath).delete();
-        }
-    }
-}
-
-
-    /**
-     * Handles the file download request.
-     * Zips multiple files or downloads a single file.
-     * @return A NanoHTTPD.Response object with the file(s) for download.
-     */
-    private Response handleDownloadRequest() {
+    private Response serveStaticFile(String uri) {
         try {
-            List<Path> files = xmlProcessorService.getGeneratedFilePaths(GENERATED_FILES_DIR);
+            // Construct the path to the resource.
+            // Remove leading slash for resourceAsStream.
+            String resourcePath = uri.startsWith("/") ? uri.substring(1) : uri;
+            InputStream inputStream = getClass().getResourceAsStream("/" + resourcePath);
 
-            if (files.isEmpty()) {
-                System.err.println("No files found to download in " + GENERATED_FILES_DIR);
-                return newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "No files generated yet.");
+            if (inputStream == null) {
+                // If the resource is not found, return a 404 Not Found response.
+                return newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "File not found: " + uri);
             }
 
-            if (files.size() == 1) {
-                // Serve a single file
-                Path filePath = files.get(0);
-                byte[] fileBytes = Files.readAllBytes(filePath);
-                Response response = newFixedLengthResponse(Response.Status.OK, "application/xml", new ByteArrayInputStream(fileBytes), fileBytes.length);
-                response.addHeader("Content-Disposition", "attachment; filename=" + filePath.getFileName().toString());
-                return response;
-            } else {
-                // Serve multiple files as a ZIP archive
-                ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                try (ZipOutputStream zos = new ZipOutputStream(baos)) {
-                    for (Path path : files) {
-                        ZipEntry entry = new ZipEntry(path.getFileName().toString());
-                        zos.putNextEntry(entry);
-                        Files.copy(path, zos);
-                        zos.closeEntry();
-                    }
-                }
-                byte[] zipBytes = baos.toByteArray();
-                Response response = newFixedLengthResponse(Response.Status.OK, "application/zip", new ByteArrayInputStream(zipBytes), zipBytes.length);
-                response.addHeader("Content-Disposition", "attachment; filename=generated_xml_files.zip");
-                return response;
-            }
+            // Determine MIME type based on file extension.
+            String mimeType = getMimeType(uri);
+            // Return a new response with the content of the file and appropriate MIME type.
+            return newFixedLengthResponse(Response.Status.OK, mimeType, inputStream, inputStream.available());
         } catch (IOException e) {
-            System.err.println("Error during file download: " + e.getMessage());
+            System.err.println("Error serving static file " + uri + ": " + e.getMessage());
             e.printStackTrace();
-            return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, MIME_PLAINTEXT, "Error downloading files.");
+            // Return an internal server error response if an I/O error occurs.
+            return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, MIME_PLAINTEXT, "Error loading file: " + uri);
         }
     }
 
     /**
-     * Helper method to create a map for dynamic message content.
-     * @param key The key for the message (e.g., "message", "errorMessage").
-     * @param value The message text.
-     * @param isSuccess True if it's a success message, false for error.
-     * @return A Map containing the message and success status.
+     * Handles the POST request for XML file generation.
+     * It parses form data, calls the XML processing service, zips the generated files in memory,
+     * stores them in a cache, and redirects the user to the result page with a download ID.
+     *
+     * @param session The HTTP session containing request details, including form data.
+     * @return A NanoHTTPD.Response object for redirection or an error message.
      */
-    private Map<String, String> createMessageMap(String key, String value, boolean isSuccess) {
-        Map<String, String> map = new HashMap<String, String>();
-        map.put(key, value);
-        map.put("isSuccess", String.valueOf(isSuccess));
-        return map;
+    private Response handleGenerateRequest(IHTTPSession session) {
+        try {
+            // Parse the multipart form data.
+            Map<String, String> files = new HashMap<>(); // To store file content (temp file paths)
+            session.parseBody(files); // Parse the body into files map (for uploaded files) and parameters
+
+            // Get form parameters
+            String numTransactionsStr = session.getParms().get("numTransactions");
+            String numBatchesStr = session.getParms().get("numBatches");
+            String numCopiesStr = session.getParms().get("numCopies");
+
+            // Validate and convert parameters to integers
+            int numTransactions = Integer.parseInt(numTransactionsStr);
+            int numBatches = Integer.parseInt(numBatchesStr);
+            int numCopies = Integer.parseInt(numCopiesStr);
+
+            // Get the uploaded template file content
+            String templateTempFilePath = files.get("templateFile"); 
+            if (templateTempFilePath == null) {
+                return newFixedLengthResponse(Response.Status.BAD_REQUEST, MIME_PLAINTEXT, "Template file not uploaded.");
+            }
+
+            // Read the uploaded template file into an InputStream from its temporary location
+            InputStream templateInputStream = new FileInputStream(templateTempFilePath);
+
+            // Generate XML files in memory and get the GenerationResult
+            GenerationResult generationResult = xmlProcessorService.generateXmlFiles(templateInputStream, numTransactions, numBatches, numCopies);
+            List<GeneratedFile> generatedFiles = generationResult.getFiles();
+            
+            // Close the template input stream after processing
+            templateInputStream.close();
+
+            if (generatedFiles.isEmpty()) {
+                return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, MIME_PLAINTEXT, "No XML files were generated.");
+            }
+
+            // Construct the ZIP file name
+            String zipFileName = generationResult.getFileTypeShortcode() + "_" + 
+                                 generationResult.getBatchTransactionType() + "_" + 
+                                 ZIP_FILE_TIMESTAMP_FORMAT.format(new Date()) + ".zip";
+
+            // Create a ZIP archive in memory
+            ByteArrayOutputStream zipOutputStream = new ByteArrayOutputStream();
+            try (ZipOutputStream zos = new ZipOutputStream(zipOutputStream)) {
+                for (GeneratedFile generatedFile : generatedFiles) {
+                    ZipEntry entry = new ZipEntry(generatedFile.getFileName());
+                    zos.putNextEntry(entry);
+                    zos.write(generatedFile.getContent());
+                    zos.closeEntry();
+                }
+            }
+
+            byte[] zipBytes = zipOutputStream.toByteArray();
+
+            // Generate a unique ID for this generated ZIP file
+            String downloadId = UUID.randomUUID().toString();
+            generatedZipCache.put(downloadId, zipBytes); // Store the ZIP content in cache
+            generatedZipNames.put(downloadId, zipFileName); // Store the ZIP filename in cache
+
+            // Redirect to result.html, passing the download ID and filename as query parameters
+            Response response = newFixedLengthResponse(Response.Status.REDIRECT_SEE_OTHER, "text/html", "Redirecting to download page...");
+            response.addHeader("Location", "/result.html?id=" + downloadId + "&filename=" + zipFileName);
+            return response;
+
+        } catch (NumberFormatException e) {
+            System.err.println("Invalid number format for input parameters: " + e.getMessage());
+            return newFixedLengthResponse(Response.Status.BAD_REQUEST, MIME_PLAINTEXT, "Invalid number format for transactions, batches, or copies.");
+        } catch (Exception e) {
+            System.err.println("Error during file generation: " + e.getMessage());
+            e.printStackTrace();
+            return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, MIME_PLAINTEXT, "Error generating files: " + e.getMessage());
+        }
     }
+
+    /**
+     * Handles the GET request for downloading a generated ZIP file from the in-memory cache.
+     *
+     * @param session The HTTP session containing request details, including query parameters.
+     * @return A NanoHTTPD.Response object for the download or an error message.
+     */
+    private Response handleDownloadRequest(IHTTPSession session) {
+        Map<String, String> parms = session.getParms();
+        String downloadId = parms.get("id");
+        String requestedFileName = parms.get("filename"); // Get filename from URL for Content-Disposition
+
+        if (downloadId == null || !generatedZipCache.containsKey(downloadId)) {
+            return newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Download link invalid or expired.");
+        }
+
+        byte[] zipBytes = generatedZipCache.remove(downloadId); // Retrieve and remove from cache (single use)
+        String actualFileName = generatedZipNames.remove(downloadId); // Retrieve and remove filename
+
+        if (zipBytes == null) {
+            return newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "File not found in cache or already downloaded.");
+        }
+
+        // Use the actual filename from the cache if available, otherwise fallback to requested or a default.
+        String fileNameToUse = (actualFileName != null && !actualFileName.isEmpty()) ? actualFileName : 
+                               (requestedFileName != null && !requestedFileName.isEmpty() ? requestedFileName : "generated_files.zip");
+
+        Response response = newFixedLengthResponse(Response.Status.OK, "application/zip", new ByteArrayInputStream(zipBytes), zipBytes.length);
+        response.addHeader("Content-Disposition", "attachment; filename=" + fileNameToUse);
+        return response;
+    }
+
+
+    /**
+     * Helper method to determine the MIME type based on the file extension.
+     *
+     * @param uri The URI of the file.
+     * @return The MIME type string.
+     */
+    private String getMimeType(String uri) {
+        if (uri.endsWith(".html")) return "text/html";
+        if (uri.endsWith(".css")) return "text/css";
+        if (uri.endsWith(".js")) return "application/javascript";
+        if (uri.endsWith(".png")) return "image/png";
+        if (uri.endsWith(".jpg") || uri.endsWith(".jpeg")) return "image/jpeg";
+        if (uri.endsWith(".gif")) return "image/gif";
+        if (uri.endsWith(".xml")) return "application/xml"; // For direct XML viewing if needed
+        if (uri.endsWith(".zip")) return "application/zip";
+        return MIME_PLAINTEXT; // Default to plain text
+    }
+    
+    private static final Response.IStatus SEE_OTHER = new Response.IStatus() {
+        @Override
+        public int getRequestStatus() {
+            return 303;
+        }
+
+        @Override
+        public String getDescription() {
+            return "See Other";
+        }
+    };
 }

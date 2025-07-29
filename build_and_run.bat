@@ -10,7 +10,7 @@ IF %ERRORLEVEL% NEQ 0 (
     exit /b %ERRORLEVEL%
 )
 
-echo Starting the application server in the background...
+echo Running the application...
 REM Run the application using the generated JAR file (jar-with-dependencies) in the background
 start "" /B java -jar target\xml-generator-0.0.1-SNAPSHOT-jar-with-dependencies.jar
 
@@ -19,8 +19,8 @@ REM Add a short delay to allow the server to fully initialize
 timeout /t 5 /nobreak >NUL
 
 echo Opening the application UI in your default browser...
-REM Open the index.html file in the default web browser
-start "" index.html
+REM Open the application URL in the default web browser
+start "" http://localhost:9090
 
 echo Application server is running. Close this window to stop the server.
 pause

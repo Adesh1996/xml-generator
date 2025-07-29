@@ -9,7 +9,7 @@
     <!-- Google Fonts - Inter for a modern look -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
     <style>
-        /* Custom CSS for Instagram-like aesthetics and responsiveness */
+      
         body {
             font-family: 'Inter', sans-serif;
             background-color: #f0f2f5;
@@ -18,7 +18,7 @@
             align-items: center;
             min-height: 100vh;
             margin: 0;
-            padding: 1rem; /* Add some padding for smaller screens */
+            padding: 1rem; 
             box-sizing: border-box;
         }
         .container {
@@ -33,32 +33,28 @@
         }
         h1 {
             color: #262626;
-            margin-bottom: 2rem;
+            font-size: 2rem;
             font-weight: 700;
-        }
-        p {
-            color: #525252;
-            font-size: 1.1rem;
             margin-bottom: 1.5rem;
         }
         .button-group {
             display: flex;
-            flex-direction: column; /* Stack buttons vertically on small screens */
+            flex-direction: column; /* Stack buttons vertically by default */
             gap: 1rem; /* Space between buttons */
             margin-top: 2rem;
         }
         .button-group a, .button-group button {
-            display: block; /* Make links behave like block elements */
-            width: 100%;
-            padding: 1rem 1.5rem;
-            border: none;
-            border-radius: 1.5rem;
-            font-size: 1.125rem;
-            font-weight: 700;
+            display: inline-flex;
+            justify-content: center;
+            align-items: center;
+            padding: 0.8rem 1.5rem;
+            border-radius: 0.75rem; /* Rounded corners for buttons */
+            font-size: 1rem;
+            font-weight: 600;
+            text-decoration: none;
+            transition: all 0.3s ease;
             cursor: pointer;
-            transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
-            text-decoration: none; /* Remove underline from links */
-            box-sizing: border-box; /* Ensure padding is included in width */
+            border: none; /* Remove default button border */
         }
         .download-button {
             background: linear-gradient(to right, #4c66ee, #3b5998, #36a4e0); /* Instagram-like gradient */
@@ -93,18 +89,42 @@
                 flex-direction: row; /* Arrange buttons horizontally on larger screens */
             }
             .button-group a, .button-group button {
-                width: auto; /* Allow buttons to size content */
-                flex-grow: 1; /* Distribute space evenly */
+                flex-grow: 1; /* Allow buttons to grow and fill space */
             }
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1 class="text-3xl">File Generation Complete!</h1>
-
-        <!-- Dynamic content placeholders -->
-        [[${result_content_html}]]
+        <h1>File Generation Complete!</h1>
+        <p class="message" id="statusMessage">Your files are ready for download.</p>
+        
+        <div class="button-group">
+            <a href="#" id="downloadLink" class="download-button">Download Files</a>
+            <button onclick="window.location.href='/'" class="refresh-button">Generate More Files</button>
+        </div>
     </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const downloadId = urlParams.get('id');
+            const fileName = urlParams.get('filename');
+            const downloadLink = document.getElementById('downloadLink');
+            const statusMessage = document.getElementById('statusMessage');
+
+            if (downloadId && fileName) {
+                // Construct the download URL
+                downloadLink.href = `/download-generated-files?id=${downloadId}&filename=${fileName}`;
+                statusMessage.textContent = `Your files are ready: ${fileName}`;
+                statusMessage.classList.remove('error'); // Ensure it's not an error message
+            } else {
+                // If no valid ID or filename, display an error message
+                downloadLink.style.display = 'none'; // Hide download button
+                statusMessage.textContent = 'Error: No files found or download link expired.';
+                statusMessage.classList.add('error');
+            }
+        });
+    </script>
 </body>
 </html>

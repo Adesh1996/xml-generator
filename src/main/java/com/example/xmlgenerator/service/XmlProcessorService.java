@@ -17,15 +17,10 @@ import javax.xml.transform.TransformerException;
 import javax.xml.transform.TransformerFactory;
 import javax.xml.transform.dom.DOMSource;
 import javax.xml.transform.stream.StreamResult;
-import java.io.File;
-import java.io.FileOutputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
-import java.io.ByteArrayOutputStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
+import java.math.BigDecimal;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
@@ -35,8 +30,10 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
-import java.math.BigDecimal; // For precise sum calculations to avoid floating point issues
-import java.util.regex.Pattern; // For regex matching in file cleanup
+
+
+
+
 
 /**
  * Service class responsible for processing and generating XML files.
@@ -48,15 +45,12 @@ public class XmlProcessorService {
     private static final Random RANDOM = new Random();
     // Date format for yyyy-MM-dd (for execution date)
     private static final SimpleDateFormat DATE_FORMAT = new SimpleDateFormat("yyyy-MM-dd");
-    // Date format for yyyyMMddHHmmss (for message IDs and creation date/time, without hyphens/colons)
-    private static final SimpleDateFormat MSG_ID_DATE_FORMAT = new SimpleDateFormat("yyyyMMddHHmmss"); // Modified: Removed hyphens and colons
+    // Date format for yyyyMMddHHmmss (for message IDs and other IDs, without hyphens/colons)
+    private static final SimpleDateFormat MSG_ID_DATE_FORMAT = new SimpleDateFormat("yyyyMMddHHmmss");
+    // New Date format for CreDtTm: YYYY-MM-DDTHH:MM:SS (ISO 8601 format)
+    private static final SimpleDateFormat CRE_DT_TM_FORMAT = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss");
     // New Date format for file naming convention: YYYYMMDDHHmmssSSS
     private static final SimpleDateFormat FILE_NAME_TIMESTAMP_FORMAT = new SimpleDateFormat("yyyyMMddHHmmssSSS");
-
-    // Regex pattern for generated file names: <FileFormat>_<Target>_<TimeStamp>_F<Suffix>.xml
-    // Example: PAIN1V3_SDMC_20250721123456789_F1.xml
-    private static final Pattern GENERATED_FILE_PATTERN = Pattern.compile("^(PAIN|PACS|CAMT)\\d+V\\d+_[A-Z]{4}_\\d{17}_F\\d+\\.xml$");
-
 
     // ExecutorService for managing a pool of threads for concurrent file generation.
     // The number of threads is set to the number of available processors for optimal performance.
@@ -65,19 +59,20 @@ public class XmlProcessorService {
     /**
      * Generates multiple XML files based on the provided template and parameters.
      * Each copy of the generated file is processed in a separate thread to improve performance.
+     * The generated XML content is returned as a GenerationResult object, not saved to disk.
      *
      * @param templateInputStream InputStream of the template XML file.
      * @param numTransactions     Total number of transactions to generate across all batches.
      * @param numBatches          Total number of batches to divide transactions into.
      * @param numCopies           Number of copies of the generated file.
-     * @param outputDir           Directory to save the generated files.
+     * @return A GenerationResult object containing the list of GeneratedFile objects, file type, and batch type.
      * @throws IOException                  If an I/O error occurs during file operations.
      * @throws ParserConfigurationException If a DocumentBuilder cannot be created.
      * @throws SAXException                 If any parse errors occur during XML parsing.
      * @throws TransformerException         If an unrecoverable error occurs during XML transformation.
      * @throws InterruptedException         If the current thread is interrupted while waiting for tasks to complete.
      */
-    public void generateXmlFiles(InputStream templateInputStream, int numTransactions, int numBatches, int numCopies, String outputDir)
+    public GenerationResult generateXmlFiles(InputStream templateInputStream, int numTransactions, int numBatches, int numCopies)
             throws IOException, ParserConfigurationException, SAXException, TransformerException, InterruptedException {
 
         // Use DocumentBuilderFactory to create a DocumentBuilder for parsing XML.
@@ -93,12 +88,11 @@ public class XmlProcessorService {
 
         // Determine file type shortcode and batch/transaction type once from the template
         final String fileTypeShortcode = getFileTypeAndVersionShortcode(templateDoc);
-        // Pass numCopies as 1 here, as it's no longer used to determine the batch type string
         final String batchTransactionType = getBatchTransactionType(numTransactions, numBatches, 1); 
 
         // List to hold Callable tasks, each representing the generation of one XML file copy.
-        List<Callable<Void>> tasks = new ArrayList<>();
-
+        List<Callable<GeneratedFile>> tasks = new ArrayList<>();
+        
         // Create a task for each copy requested by the user.
         for (int i = 0; i < numCopies; i++) {
             final int copyIndex = i; // Final variable for use in anonymous inner class
@@ -110,31 +104,36 @@ public class XmlProcessorService {
             final String fileTimestamp = FILE_NAME_TIMESTAMP_FORMAT.format(new Date());
 
             // Construct the file name for the current copy using the new naming convention.
-            // Format: <FileFormat>_<Target>_<TimeStamp>_Suffix (e.g., PAIN1V3_SDMC_20250721123456789_F1.xml)
+            // Format: <FileFormat>_<Target>_<TimeStamp>_F<Suffix>.xml (e.g., PAIN1V3_SDMC_20250721123456789_F1.xml)
             final String fileName = fileTypeShortcode + "_" + batchTransactionType + "_" + fileTimestamp + "_F" + (copyIndex + 1) + ".xml";
             
-            // Construct the full file path.
-            final String filePath = outputDir + File.separator + fileName;
-
             // Add a new Callable task to the list.
-            // A Callable returns a result (Void in this case) and can throw checked exceptions.
-            tasks.add(new Callable<Void>() {
-                public Void call() throws Exception {
+            // This Callable will process the XML and return a GeneratedFile object.
+            tasks.add(new Callable<GeneratedFile>() {
+                public GeneratedFile call() throws Exception {
                     // Process the cloned XML document with the specified parameters.
                     processSingleXmlDocument(currentTemplateDoc, numTransactions, numBatches);
-                    // Save the modified XML document to the file system.
-                    saveXmlDocument(currentTemplateDoc, filePath);
-                    return null; // Return null as this Callable doesn't need to return a specific value.
+                    // Convert the modified XML document to a byte array.
+                    byte[] content = xmlDocumentToBytes(currentTemplateDoc);
+                    return new GeneratedFile(fileName, content); // Return GeneratedFile object
                 }
             });
         }
 
         // Execute all tasks in the thread pool and wait for their completion.
-        // invokeAll blocks until all tasks are completed, or the timeout occurs, or the current thread is interrupted.
-        List<Future<Void>> futures = executorService.invokeAll(tasks);
-        // In a more robust application, you would iterate through 'futures' to check for exceptions
-        // using future.get() to ensure all tasks completed successfully.
-        // For this example, we'll assume success if no InterruptedException occurs during invokeAll.
+        List<Future<GeneratedFile>> futures = executorService.invokeAll(tasks);
+
+        // Retrieve results from futures and add to the list of generated file contents.
+        List<GeneratedFile> generatedFiles = new ArrayList<>();
+        for (Future<GeneratedFile> future : futures) {
+            try {
+                generatedFiles.add(future.get()); // Get the GeneratedFile object result from each completed task
+            } catch (Exception e) {
+                System.err.println("Error retrieving generated file content from task: " + e.getMessage());
+                // Handle exceptions from individual tasks if necessary
+            }
+        }
+        return new GenerationResult(generatedFiles, fileTypeShortcode, batchTransactionType); // Return the GenerationResult object
     }
 
     /**
@@ -173,6 +172,7 @@ public class XmlProcessorService {
         switch (fileTypeShortcode) {
             case "PAIN1V3":
             case "PAIN1V9":
+                // Covers Pain1v3_2, Pain1v3_3 if they resolve to PAIN1V3 or PAIN1V9 from namespace
                 batchTagName = "PmtInf";
                 transactionTagName = "CdtTrfTxInf";
                 batchIdTagName = "PmtInfId";
@@ -183,51 +183,52 @@ public class XmlProcessorService {
                 amountTagName = "InstdAmt";
                 break;
             case "PAIN7V2":
+            case "PAIN7V9": // Added support for Pain7v9
                 batchTagName = "OrgnlPmtInfAndRvsl";
                 transactionTagName = "TxInf";
-                batchIdTagName = "RvslPmtInfId"; // Specific to pain.007
-                batchNbOfTxsTagName = "OrgnlNbOfTxs"; // Specific to pain.007
-                batchCtrlSumTagName = "OrgnlCtrlSum"; // Specific to pain.007
+                batchIdTagName = "RvslPmtInfId";
+                batchNbOfTxsTagName = "OrgnlNbOfTxs";
+                batchCtrlSumTagName = "OrgnlCtrlSum";
                 transactionIdTagName1 = "RvslId";
-                transactionIdTagName2 = "OrgnlInstrId"; // pain.007 uses OrgnlInstrId
-                amountTagName = "OrgnlInstdAmt"; // For pain.007, amount is OrgnlInstdAmt
+                transactionIdTagName2 = "OrgnlInstrId";
+                amountTagName = "OrgnlInstdAmt";
                 break;
             case "PAIN8V2":
+            case "PAIN8V8": // Added support for pain8v8_8 (assuming it resolves to PAIN8V8)
+                // Covers pain8v2_2, pain8v2_3 if they resolve to PAIN8V2 from namespace
                 batchTagName = "PmtInf";
                 transactionTagName = "DrctDbtTxInf";
                 batchIdTagName = "PmtInfId";
                 batchNbOfTxsTagName = "NbOfTxs";
                 batchCtrlSumTagName = "CtrlSum";
                 transactionIdTagName1 = "EndToEndId";
-                transactionIdTagName2 = null; // pain.008 typically doesn't have InstrId at this level
+                transactionIdTagName2 = null;
                 amountTagName = "InstdAmt";
                 break;
             case "PACS8V2":
-                // For PACS, transactions are directly under the main message root (e.g., FIToFICstmrCdtTrf)
-                // There isn't a repeating "batch" element like PmtInf.
-                batchTagName = "FIToFICstmrCdtTrf"; // The main message container
+            case "PACS8V8": // Added support for PACS 8v8
+                batchTagName = "FIToFICstmrCdtTrf";
                 transactionTagName = "CdtTrfTxInf";
-                batchIdTagName = null; // No specific batch ID element to update here (it's not a repeating batch ID)
-                batchNbOfTxsTagName = "NbOfTxs"; // These will be updated in GrpHdr
-                batchCtrlSumTagName = "CtrlSum"; // These will be updated in GrpHdr
+                batchIdTagName = null;
+                batchNbOfTxsTagName = "NbOfTxs";
+                batchCtrlSumTagName = "CtrlSum";
                 transactionIdTagName1 = "EndToEndId";
                 transactionIdTagName2 = "InstrId";
-                transactionIdTagName3 = "TxId"; // PACS.008 also has TxId
-                amountTagName = "IntrBkSttlmAmt"; // Specific to pacs.008
-                System.out.println("INFO: Processing PACS8V2. Batch replication logic will be handled differently.");
+                transactionIdTagName3 = "TxId";
+                amountTagName = "IntrBkSttlmAmt";
+                System.out.println("INFO: Processing PACS message. Batch replication logic will be handled differently.");
                 break;
-            case "CAMT53V2": // Placeholder, CAMT messages are typically statements, not payment initiation/reversal
-                // CAMT messages usually don't have PmtInf or transaction blocks in the same way as PAIN/PACS.
-                batchTagName = "Stmt"; // Example for CAMT.053 statement
-                transactionTagName = "Ntry"; // Example for CAMT.053 entry
-                batchIdTagName = "Id"; // Example for CAMT.053 statement ID
-                batchNbOfTxsTagName = "NbOfTxs"; // Example for CAMT.053 entry count
-                batchCtrlSumTagName = "TtlNtries"; // Example for CAMT.053 total entries
+            case "CAMT53V2":
+                batchTagName = "Stmt";
+                transactionTagName = "Ntry";
+                batchIdTagName = "Id";
+                batchNbOfTxsTagName = "NbOfTxs";
+                batchCtrlSumTagName = "TtlNtries";
                 System.err.println("Warning: CAMT53V2 template processing is highly specific and current logic might not apply.");
                 break;
             default:
-                batchTagName = "PmtInf"; // Default to common PAIN.001 batch tag
-                transactionTagName = "CdtTrfTxInf"; // Default to common PAIN.001 transaction tag
+                batchTagName = "PmtInf";
+                transactionTagName = "CdtTrfTxInf";
                 batchIdTagName = "PmtInfId";
                 batchNbOfTxsTagName = "NbOfTxs";
                 batchCtrlSumTagName = "CtrlSum";
@@ -311,7 +312,6 @@ public class XmlProcessorService {
                     Element txInfElement = (Element) currentTxInf;
 
                     // Update transaction IDs - these are generally expected.
-                    // newMsgId already does not contain hyphens or colons
                     updateElementTextContentOptional(txInfElement, transactionIdTagName1, newMsgId + "B" + (i + 1) + "T" + (j + 1));
                     if (transactionIdTagName2 != null) {
                         updateElementTextContentOptional(txInfElement, transactionIdTagName2, newMsgId + "B" + (i + 1) + "T" + (j + 1));
@@ -323,7 +323,7 @@ public class XmlProcessorService {
                     // Extract the transaction amount and add it to the batch control sum.
                     Node amtNode = findFirstElementByTagName(txInfElement, amountTagName);
                     // Special handling for pain.007 where OrgnlInstdAmt might be nested under OrgnlTxRef
-                    if (amtNode == null && "PAIN7V2".equals(fileTypeShortcode)) {
+                    if (amtNode == null && ("PAIN7V2".equals(fileTypeShortcode) || "PAIN7V9".equals(fileTypeShortcode))) {
                         Element orgnlTxRef = findFirstElementByTagName(txInfElement, "OrgnlTxRef");
                         if (orgnlTxRef != null) {
                             amtNode = findFirstElementByTagName(orgnlTxRef, amountTagName);
@@ -348,8 +348,8 @@ public class XmlProcessorService {
             }
 
             // Update batch-level transaction count and control sum using determined tag names.
-            // For PACS8V2, these are updated in the GrpHdr, not the 'batch' element itself.
-            if (!"PACS8V2".equals(fileTypeShortcode)) {
+            // For PACS messages, these are updated in the GrpHdr, not the 'batch' element itself.
+            if (!fileTypeShortcode.startsWith("PACS")) { // Apply to all PAIN and CAMT, but not PACS
                 // These are optional as per user's last request.
                 updateElementTextContentOptional(pmtInfElement, batchNbOfTxsTagName, String.valueOf(currentBatchTxnCount));
                 updateElementTextContentOptional(pmtInfElement, batchCtrlSumTagName, batchCtrlSum.toPlainString());
@@ -385,7 +385,7 @@ public class XmlProcessorService {
      */
     private void updateDates(Document doc) {
         String currentDate = DATE_FORMAT.format(new Date()); // Current date in yyyy-MM-dd format
-        String currentDateTime = MSG_ID_DATE_FORMAT.format(new Date()); // Current date-time in yyyyMMddHHmmss format
+        String currentDateTime = CRE_DT_TM_FORMAT.format(new Date()); // Modified: Use CRE_DT_TM_FORMAT for CreDtTm
 
         // Update the text content of the "CreDtTm" (Creation Date/Time) element.
         updateElementTextContent(doc, "CreDtTm", currentDateTime);
@@ -493,15 +493,15 @@ public class XmlProcessorService {
     }
 
     /**
-     * Saves the XML Document to a specified file path.
+     * Converts an XML Document to a byte array.
      * The output XML will be indented for readability.
      *
-     * @param doc      The XML Document to save.
-     * @param filePath The full path where the XML file should be saved.
+     * @param doc The XML Document to convert.
+     * @return A byte array containing the XML content.
      * @throws TransformerException If an unrecoverable error occurs during the XML transformation process.
-     * @throws IOException          If an I/O error occurs while writing the file.
+     * @throws IOException          If an I/O error occurs while writing to the byte stream.
      */
-    private void saveXmlDocument(Document doc, String filePath) throws TransformerException, IOException {
+    private byte[] xmlDocumentToBytes(Document doc) throws TransformerException, IOException {
         // Create a TransformerFactory instance.
         TransformerFactory transformerFactory = TransformerFactory.newInstance();
         // Create a Transformer instance.
@@ -517,53 +517,12 @@ public class XmlProcessorService {
         StreamResult result = new StreamResult(baos); // Create a StreamResult for the output stream
         transformer.transform(source, result); // Perform the XML transformation (write to ByteArrayOutputStream)
 
-        // Convert to string, trim leading/trailing whitespace (including newlines), and write back to file
+        // Convert to string, trim leading/trailing whitespace (including newlines), and get bytes
         String xmlString = baos.toString("UTF-8").trim(); // Trim removes leading/trailing whitespace, including newlines
-        try (OutputStream os = new FileOutputStream(filePath)) {
-            os.write(xmlString.getBytes("UTF-8")); // Write the trimmed string's bytes to the file
-        }
+        return xmlString.getBytes("UTF-8"); // Return the trimmed string's bytes
     }
-
-    /**
-     * Cleans up previously generated XML files in the specified directory.
-     * It deletes files that match the application's naming convention.
-     *
-     * @param directoryPath The path to the directory where generated files are stored.
-     */
-    public void cleanupGeneratedFiles(String directoryPath) {
-        File directory = new File(directoryPath);
-        // Check if the directory exists and is actually a directory.
-        if (directory.exists() && directory.isDirectory()) {
-            File[] files = directory.listFiles();
-            if (files != null) {
-                for (File file : files) {
-                    // Check if the item is a file and matches the new naming convention.
-                    if (file.isFile() && GENERATED_FILE_PATTERN.matcher(file.getName()).matches()) {
-                        if (!file.delete()) {
-                            System.err.println("Failed to delete old generated file: " + file.getName());
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /**
-     * Retrieves a list of Path objects for all generated XML files in the specified directory.
-     * Files are identified by the application's naming convention.
-     *
-     * @param directoryPath The path to the directory containing generated files.
-     * @return A List of Path objects, each representing a generated XML file.
-     * @throws IOException If an I/O error occurs while traversing the directory.
-     */
-    public List<Path> getGeneratedFilePaths(String directoryPath) throws IOException {
-        List<Path> filePaths = new ArrayList<>();
-        Files.walk(Paths.get(directoryPath))
-                .filter(path -> Files.isRegularFile(path) && GENERATED_FILE_PATTERN.matcher(path.getFileName().toString()).matches())
-                .forEach(filePaths::add);
-        return filePaths;
-    }
-
+    
+    
     /**
      * Determines the shortcode for the XML file type and version based on the document's structure.
      * It primarily looks at the namespace URI of the first child element of the document's root.
@@ -618,7 +577,7 @@ public class XmlProcessorService {
 
         return "UNKNOWN";
     }
-
+    
     /**
      * Determines the batch/transaction type string based on the number of transactions and batches.
      * This is used for naming the generated files.
