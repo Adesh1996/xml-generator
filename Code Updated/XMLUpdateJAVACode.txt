@@ -23,46 +23,78 @@ import java.time.format.DateTimeFormatter;
 
 public class PainXmlUpdater {
 
+    // Date and time formatters
     private static final DateTimeFormatter DATETIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+    private static final DateTimeFormatter MSG_ID_TIMESTAMP_FORMATTER = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
 
+    /**
+     * Updates a single pain XML file based on the specified requirements.
+     *
+     * @param filePath The absolute path to the XML file.
+     * @param addTownNameFlag A flag to indicate whether to add the TwnNm tag.
+     * @param townName The town name to add if addTownNameFlag is true.
+     * @param removeAdrTpFlag A flag to indicate whether to remove the AdrTp tag.
+     * @throws ParserConfigurationException If a DocumentBuilder cannot be created.
+     * @throws IOException If any I/O error occurs.
+     * @throws SAXException If any parse error or warning occurs.
+     * @throws TransformerException If an unrecoverable error occurs during the transformation.
+     */
     public void updatePainXmlFile(String filePath, boolean addTownNameFlag, String townName, boolean removeAdrTpFlag)
             throws ParserConfigurationException, IOException, SAXException, TransformerException {
 
         File xmlFile = new File(filePath);
+        // Ensure the file exists and is a file before attempting to parse
+        if (!xmlFile.exists() || !xmlFile.isFile()) {
+            System.err.println("  Skipping: File not found or is not a file: " + filePath);
+            return;
+        }
+
         DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
         DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
         Document doc = dBuilder.parse(xmlFile);
-        doc.getDocumentElement().normalize();
+        doc.getDocumentElement().normalize(); // Normalize the document to remove empty text nodes
 
-        // Generate base Message ID
-        String baseMessageId = "INST" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss"));
+        // Generate base Message ID, unique for each file processing run
+        String baseMessageId = "INST" + LocalDateTime.now().format(MSG_ID_TIMESTAMP_FORMATTER);
 
-        // 1. Update Message ID
+        System.out.println("\n--- Processing file: " + xmlFile.getName() + " ---");
+
+        // 1. Update Message ID (<MsgId>)
         NodeList msgIdNodes = doc.getElementsByTagName("MsgId");
         if (msgIdNodes.getLength() > 0) {
             msgIdNodes.item(0).setTextContent(baseMessageId);
-            System.out.println("Updated MsgId to: " + baseMessageId);
+            System.out.println("  Updated MsgId to: " + baseMessageId);
+        } else {
+            System.out.println("  MsgId tag not found.");
         }
 
-        // 4. Update CreDtTm (Creation Date and Time)
+        // 4. Update Creation Date and Time (<CreDtTm>)
         NodeList creDtTmNodes = doc.getElementsByTagName("CreDtTm");
         if (creDtTmNodes.getLength() > 0) {
             String currentDateTime = LocalDateTime.now().format(DATETIME_FORMATTER);
             creDtTmNodes.item(0).setTextContent(currentDateTime);
-            System.out.println("Updated CreDtTm to: " + currentDateTime);
+            System.out.println("  Updated CreDtTm to: " + currentDateTime);
+        } else {
+            System.out.println("  CreDtTm tag not found.");
         }
 
-        // 5. Update ReqdExctnDt (Requested Execution Date)
+        // 5. Update Requested Execution Date (<ReqdExctnDt>)
         NodeList reqdExctnDtNodes = doc.getElementsByTagName("ReqdExctnDt");
         if (reqdExctnDtNodes.getLength() > 0) {
             String currentDate = LocalDateTime.now().format(DATE_FORMATTER);
             reqdExctnDtNodes.item(0).setTextContent(currentDate);
-            System.out.println("Updated ReqdExctnDt to: " + currentDate);
+            System.out.println("  Updated ReqdExctnDt to: " + currentDate);
+        } else {
+            System.out.println("  ReqdExctnDt tag not found.");
         }
 
-        // 2. Update PmtInfId and 3. Update InstrId & EndToEndId
+        // 2. Update Payment Information ID (<PmtInfId>) and 3. Update Instruction ID (<InstrId>) & End-to-End ID (<EndToEndId>)
         NodeList pmtInfNodes = doc.getElementsByTagName("PmtInf");
+        if (pmtInfNodes.getLength() == 0) {
+            System.out.println("  PmtInf tag not found. Skipping PmtInfId, InstrId, EndToEndId updates.");
+        }
+
         for (int i = 0; i < pmtInfNodes.getLength(); i++) {
             Node pmtInfNode = pmtInfNodes.item(i);
             if (pmtInfNode.getNodeType() == Node.ELEMENT_NODE) {
@@ -73,10 +105,13 @@ public class PainXmlUpdater {
                 if (pmtInfIdNodes.getLength() > 0) {
                     String pmtInfId = baseMessageId + "B" + (i + 1);
                     pmtInfIdNodes.item(0).setTextContent(pmtInfId);
-                    System.out.println("Updated PmtInfId for batch " + (i + 1) + " to: " + pmtInfId);
+                    System.out.println("  Updated PmtInfId for batch " + (i + 1) + " to: " + pmtInfId);
 
                     // Update InstrId and EndToEndId within this PmtInf block
                     NodeList cdtTrfTxInfNodes = pmtInfElement.getElementsByTagName("CdtTrfTxInf");
+                    if (cdtTrfTxInfNodes.getLength() == 0) {
+                        System.out.println("    CdtTrfTxInf tag not found within this PmtInf. Skipping InstrId, EndToEndId updates for this batch.");
+                    }
                     for (int j = 0; j < cdtTrfTxInfNodes.getLength(); j++) {
                         Node cdtTrfTxInfNode = cdtTrfTxInfNodes.item(j);
                         if (cdtTrfTxInfNode.getNodeType() == Node.ELEMENT_NODE) {
@@ -86,8 +121,10 @@ public class PainXmlUpdater {
                             NodeList instrIdNodes = cdtTrfTxInfElement.getElementsByTagName("InstrId");
                             if (instrIdNodes.getLength() > 0) {
                                 String instrId = pmtInfId + "T" + (j + 1);
-                                instrIdNodes.item(0).setText(instrId);
-                                System.out.println("Updated InstrId for transaction " + (j + 1) + " to: " + instrId);
+                                instrIdNodes.item(0).setTextContent(instrId);
+                                System.out.println("    Updated InstrId for transaction " + (j + 1) + " to: " + instrId);
+                            } else {
+                                System.out.println("    InstrId tag not found for transaction " + (j + 1) + ".");
                             }
 
                             // Update EndToEndId
@@ -95,10 +132,14 @@ public class PainXmlUpdater {
                             if (endToEndIdNodes.getLength() > 0) {
                                 String endToEndId = pmtInfId + "T" + (j + 1);
                                 endToEndIdNodes.item(0).setTextContent(endToEndId);
-                                System.out.println("Updated EndToEndId for transaction " + (j + 1) + " to: " + endToEndId);
+                                System.out.println("    Updated EndToEndId for transaction " + (j + 1) + " to: " + endToEndId);
+                            } else {
+                                System.out.println("    EndToEndId tag not found for transaction " + (j + 1) + ".");
                             }
                         }
                     }
+                } else {
+                    System.out.println("  PmtInfId tag not found for batch " + (i + 1) + ".");
                 }
             }
         }
@@ -106,6 +147,9 @@ public class PainXmlUpdater {
         // 7. Add TwnNm tag
         if (addTownNameFlag && townName != null && !townName.isEmpty()) {
             NodeList dbtrNodes = doc.getElementsByTagName("Dbtr");
+            if (dbtrNodes.getLength() == 0) {
+                System.out.println("  Dbtr tag not found. Cannot add TwnNm.");
+            }
             for (int i = 0; i < dbtrNodes.getLength(); i++) {
                 Node dbtrNode = dbtrNodes.item(i);
                 if (dbtrNode.getNodeType() == Node.ELEMENT_NODE) {
@@ -118,12 +162,12 @@ public class PainXmlUpdater {
                             Element twnNmElement = doc.createElement("TwnNm");
                             twnNmElement.setTextContent(townName);
                             pstlAdrElement.appendChild(twnNmElement);
-                            System.out.println("Added TwnNm: " + townName + " to a Dbtr's PstlAdr.");
+                            System.out.println("  Added TwnNm: '" + townName + "' to a Dbtr's PstlAdr.");
                         } else {
-                            System.out.println("TwnNm already exists for a Dbtr's PstlAdr. Not adding a duplicate.");
+                            System.out.println("  TwnNm already exists for a Dbtr's PstlAdr. Not adding a duplicate.");
                         }
                     } else {
-                        System.out.println("PstlAdr not found under Dbtr. Cannot add TwnNm.");
+                        System.out.println("  PstlAdr not found under Dbtr for adding TwnNm.");
                     }
                 }
             }
@@ -132,12 +176,15 @@ public class PainXmlUpdater {
         // 8. Remove AdrTp tag
         if (removeAdrTpFlag) {
             NodeList adrTpNodes = doc.getElementsByTagName("AdrTp");
-            // Iterate backwards because removing nodes changes the NodeList
+            if (adrTpNodes.getLength() == 0) {
+                System.out.println("  AdrTp tag not found. No tags to remove.");
+            }
+            // Iterate backwards because removing nodes changes the NodeList dynamically
             for (int i = adrTpNodes.getLength() - 1; i >= 0; i--) {
                 Node adrTpNode = adrTpNodes.item(i);
                 if (adrTpNode.getParentNode() != null) {
                     adrTpNode.getParentNode().removeChild(adrTpNode);
-                    System.out.println("Removed AdrTp tag.");
+                    System.out.println("  Removed AdrTp tag.");
                 }
             }
         }
@@ -153,28 +200,75 @@ public class PainXmlUpdater {
         String newFileName = "INST" + originalFileName;
         Path newFilePath = Paths.get(xmlFile.getParent(), newFileName);
 
-        StreamResult result = new StreamResult(newFilePath.toFile());
-        transformer.transform(source, result);
+        try (StreamResult result = new StreamResult(newFilePath.toFile())) {
+            transformer.transform(source, result);
+            System.out.println("Successfully updated and saved file to: " + newFilePath.toAbsolutePath());
+        } catch (TransformerException e) {
+            System.err.println("  Error saving modified file " + newFilePath.toAbsolutePath() + ": " + e.getMessage());
+            throw e; // Re-throw to be caught by the outer loop
+        }
 
-        System.out.println("Successfully updated and saved file to: " + newFilePath.toAbsolutePath());
 
-        // Delete original file if necessary (optional, be cautious)
-        // Files.delete(xmlFile.toPath());
-        // System.out.println("Original file deleted: " + filePath);
+        // Optional: Delete original file. Use with caution!
+        // try {
+        //     Files.delete(xmlFile.toPath());
+        //     System.out.println("  Original file deleted: " + filePath);
+        // } catch (IOException e) {
+        //     System.err.println("  Failed to delete original file " + filePath + ": " + e.getMessage());
+        // }
     }
 
     public static void main(String[] args) {
-        String inputFilePath = "path/to/your/pain_file.xml"; // **IMPORTANT: Replace with your actual file path**
-        boolean addTownName = true; // Set to true to add TwnNm, false otherwise
+        // --- Configuration for Scenario 2 ---
+        // IMPORTANT: Replace with the actual path to your directory containing pain XML files
+        String directoryPath = "C:\\Your\\Path\\To\\PainFiles"; // Example for Windows. Use "/home/user/PainFiles" for Linux/macOS
+        
+        // Flags for additional requirements
+        boolean addTownName = true;   // Set to true to add TwnNm, false otherwise
         String townNameToAdd = "Pune"; // Town name to be added if addTownName is true
         boolean removeAdrTp = true;   // Set to true to remove AdrTp, false otherwise
+        // --- End Configuration ---
 
         PainXmlUpdater updater = new PainXmlUpdater();
-        try {
-            updater.updatePainXmlFile(inputFilePath, addTownName, townNameToAdd, removeAdrTp);
-        } catch (ParserConfigurationException | IOException | SAXException | TransformerException e) {
-            e.printStackTrace();
-            System.err.println("An error occurred during XML processing: " + e.getMessage());
+
+        File folder = new File(directoryPath);
+
+        // Check if the directory exists and is actually a directory
+        if (!folder.exists()) {
+            System.err.println("Error: Directory does not exist: " + directoryPath);
+            return;
         }
+        if (!folder.isDirectory()) {
+            System.err.println("Error: Path is not a directory: " + directoryPath);
+            return;
+        }
+
+        File[] listOfFiles = folder.listFiles(); // Get all files and directories in the folder
+
+        if (listOfFiles == null || listOfFiles.length == 0) {
+            System.out.println("No files found in the directory: " + directoryPath);
+            return;
+        }
+
+        System.out.println("Starting to process files in directory: " + directoryPath);
+
+        for (File file : listOfFiles) {
+            // Check if it's a file (not a subdirectory) and if its extension matches expected XML-like types
+            if (file.isFile() && 
+                (file.getName().toLowerCase().endsWith(".xml") || 
+                 file.getName().toLowerCase().endsWith(".txt") || 
+                 file.getName().toLowerCase().endsWith(".bsi"))) { // Check for .xml, .txt, .bsi extensions
+                
+                try {
+                    updater.updatePainXmlFile(file.getAbsolutePath(), addTownName, townNameToAdd, removeAdrTp);
+                } catch (ParserConfigurationException | IOException | SAXException | TransformerException e) {
+                    System.err.println("!!! Critical Error processing file " + file.getName() + ": " + e.getMessage());
+                    // e.printStackTrace(); // Uncomment for full stack trace for detailed debugging
+                }
+            } else {
+                System.out.println("Skipping non-XML or unsupported file type: " + file.getName());
+            }
+        }
+        System.out.println("\n--- All files processed. ---");
     }
 }
