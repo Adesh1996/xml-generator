@@ -44,26 +44,6 @@ public class PainXmlUpdater {
     }
 
     /**
-     * Helper method to check if any <IBAN> tag in the document already has a value.
-     *
-     * @param doc The XML Document to check.
-     * @return true if any <IBAN> tag contains non-empty text, false otherwise.
-     */
-    private boolean hasExistingIban(Document doc) {
-        NodeList ibanNodes = doc.getElementsByTagName("IBAN");
-        for (int i = 0; i < ibanNodes.getLength(); i++) {
-            Node ibanNode = ibanNodes.item(i);
-            if (ibanNode.getNodeType() == Node.ELEMENT_NODE) {
-                Element ibanElement = (Element) ibanNode;
-                if (ibanElement.getTextContent() != null && !ibanElement.getTextContent().trim().isEmpty()) {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
-    /**
      * Updates a single pain XML file based on the specified requirements.
      *
      * @param filePath The absolute path to the XML file.
@@ -91,12 +71,11 @@ public class PainXmlUpdater {
 
         System.out.println("\n--- Processing file: " + xmlFile.getName() + " ---");
 
-        // --- NEW RULE: Check for existing IBANs and skip the ENTIRE file if found ---
-        if (hasExistingIban(doc)) {
-            System.out.println("  Skipping file '" + xmlFile.getName() + "' because one or more <IBAN> tags already contain values.");
-            return; // Skip all further processing for this file
-        }
-        // --- End NEW IBAN Check ---
+        // --- IMPORTANT CHANGE FOR OPTION B ---
+        // The file-level skip based on pre-existing IBANs has been removed.
+        // Now, all other modifications will proceed regardless of IBAN presence.
+        // Only the IBAN population logic itself will check if an IBAN is empty before populating.
+        // --- END IMPORTANT CHANGE ---
 
         // --- CONFIGURATION AREA 2: Message ID (<MsgId>) Generation ---
         String baseMessageId = "INST" + LocalDateTime.now().format(MSG_ID_TIMESTAMP_FORMATTER) +
@@ -134,7 +113,7 @@ public class PainXmlUpdater {
         }
 
         // 2. Update Payment Information ID (<PmtInfId>) and 3. Update Instruction ID (<InstrId>) & End-to-End ID (<EndToEndId>)
-        // Also: Populate empty IBAN based on DbtrAgt BIC, and NEW: Update specific BIC only within DbtrAgt
+        // Also: Populate empty IBAN based on DbtrAgt BIC, and Update specific BIC only within DbtrAgt
         NodeList pmtInfNodes = doc.getElementsByTagName("PmtInf");
         if (pmtInfNodes.getLength() == 0) {
             System.out.println("  PmtInf tag not found. Skipping PmtInfId, InstrId, EndToEndId, and BIC/IBAN updates.");
@@ -181,7 +160,7 @@ public class PainXmlUpdater {
                                 System.out.println("    EndToEndId tag not found for transaction " + (j + 1) + ".");
                             }
 
-                            // --- NEW REQUIREMENT: Update specific wrong BIC values ONLY in DbtrAgt ---
+                            // --- Update specific wrong BIC values ONLY in DbtrAgt ---
                             final String OLD_BIC_TO_REPLACE = "BPLCESMM";
                             final String NEW_BIC_VALUE = "BARCDEFF";
                             boolean transactionBicUpdated = false;
@@ -192,7 +171,7 @@ public class PainXmlUpdater {
                                 NodeList finInstnIdNodes = dbtrAgtElement.getElementsByTagName("FinInstnId");
                                 if (finInstnIdNodes.getLength() > 0) {
                                     Element finInstnIdElement = (Element) finInstnIdNodes.item(0);
-                                    NodeList bicNodesInDbtrAgt = finInstnIdElement.getElementsByTagName("BIC"); // Get BIC specifically here
+                                    NodeList bicNodesInDbtrAgt = finInstnIdElement.getElementsByTagName("BIC");
                                     
                                     if (bicNodesInDbtrAgt.getLength() > 0) {
                                         Element bicElement = (Element) bicNodesInDbtrAgt.item(0);
@@ -207,7 +186,7 @@ public class PainXmlUpdater {
                             if (!transactionBicUpdated) {
                                 System.out.println("      No DbtrAgt BIC '" + OLD_BIC_TO_REPLACE + "' found for replacement in Tx " + (j + 1) + ".");
                             }
-                            // --- END NEW BIC Update in DbtrAgt ---
+                            // --- End BIC Update in DbtrAgt ---
 
 
                             // Populate empty IBAN based on DbtrAgt BIC (this will use the potentially updated BIC)
@@ -215,7 +194,7 @@ public class PainXmlUpdater {
 
                             if (dbtrAgtNodes.getLength() > 0 && dbtrAcctNodes.getLength() > 0) {
                                 Element dbtrAgtElement = (Element) dbtrAgtNodes.item(0);
-                                // Re-get BIC as it might have just been updated
+                                // Re-get BIC as it might have just been updated in the previous step
                                 NodeList currentDbtrAgtBicNodes = dbtrAgtElement.getElementsByTagName("BIC"); 
                                 
                                 Element dbtrAcctElement = (Element) dbtrAcctNodes.item(0);
@@ -231,6 +210,7 @@ public class PainXmlUpdater {
                                     
                                     if (ibanInIdNodes.getLength() > 0) {
                                         Element ibanElement = (Element) ibanInIdNodes.item(0);
+                                        // THIS IS THE ONLY CHECK for IBAN content now
                                         if (ibanElement.getTextContent() == null || ibanElement.getTextContent().trim().isEmpty()) {
                                             String mappedIban = BIC_IBAN_MAP.get(bicValue);
                                             if (mappedIban != null) {
@@ -240,7 +220,8 @@ public class PainXmlUpdater {
                                                 System.out.println("      No IBAN mapping found for BIC: " + bicValue + " (Tx " + (j+1) + ")");
                                             }
                                         } else {
-                                            System.out.println("      IBAN already present for transaction " + (j + 1) + ". No change made (should have been skipped at file level).");
+                                            // This log indicates that an IBAN was found, so it wasn't populated
+                                            System.out.println("      IBAN already present for transaction " + (j + 1) + ". No new IBAN populated.");
                                         }
                                     } else {
                                         System.out.println("      <IBAN> tag not found under <DbtrAcct>/<Id> for transaction " + (j + 1) + ".");
@@ -369,7 +350,6 @@ public class PainXmlUpdater {
         System.out.println("Starting to process files in directory: " + directoryPath);
 
         for (File file : listOfFiles) {
-            // Process files with .xml, .txt, or .bsi extensions (case-insensitive)
             if (file.isFile() && 
                 (file.getName().toLowerCase().endsWith(".xml") || 
                  file.getName().toLowerCase().endsWith(".txt") || 
