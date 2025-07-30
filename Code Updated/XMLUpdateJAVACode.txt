@@ -20,13 +20,54 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Random;
 
 public class PainXmlUpdater {
 
-    // Date and time formatters
+    // Date and time formatters (Java 8 time API)
     private static final DateTimeFormatter DATETIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd");
     private static final DateTimeFormatter MSG_ID_TIMESTAMP_FORMATTER = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
+    private static final Random RANDOM = new Random(); // For generating random numbers
+
+    // --- CONFIGURATION AREA 1: BIC to IBAN Mapping ---
+    // Populate this map with your specific BIC to IBAN key-value pairs.
+    // Key: BIC Value (e.g., from <DbtrAgt> BIC)
+    // Value: Corresponding IBAN to set
+    private static final Map<String, String> BIC_IBAN_MAP = new HashMap<>();
+
+    static {
+        // Add your mappings here. These are just examples.
+        BIC_IBAN_MAP.put("DEUTDEFFXXX", "DE89370400440532013000"); // Example: Deutsche Bank BIC -> IBAN
+        BIC_IBAN_MAP.put("CHASUS33XXX", "US12345678901234567890"); // Example: JP Morgan Chase BIC -> IBAN
+        BIC_IBAN_MAP.put("CITIUS33XXX", "US09876543210987654321"); // Example: Citibank BIC -> IBAN
+        // Add more BIC -> IBAN entries as needed:
+        // BIC_IBAN_MAP.put("YOURBICVALUE", "YOURCORRESPONDINGIBAN");
+    }
+
+    /**
+     * Helper method to check if any <IBAN> tag in the document already has a value.
+     * This is used to implement the "skip file if IBAN is already present" requirement.
+     *
+     * @param doc The XML Document to check.
+     * @return true if any <IBAN> tag contains non-empty text, false otherwise.
+     */
+    private boolean hasExistingIban(Document doc) {
+        NodeList ibanNodes = doc.getElementsByTagName("IBAN");
+        for (int i = 0; i < ibanNodes.getLength(); i++) {
+            Node ibanNode = ibanNodes.item(i);
+            if (ibanNode.getNodeType() == Node.ELEMENT_NODE) {
+                Element ibanElement = (Element) ibanNode;
+                // Check if the IBAN element has any text content that is not just whitespace
+                if (ibanElement.getTextContent() != null && !ibanElement.getTextContent().trim().isEmpty()) {
+                    return true; // Found an IBAN that is not empty
+                }
+            }
+        }
+        return false; // No non-empty IBAN tags found
+    }
 
     /**
      * Updates a single pain XML file based on the specified requirements.
@@ -44,7 +85,6 @@ public class PainXmlUpdater {
             throws ParserConfigurationException, IOException, SAXException, TransformerException {
 
         File xmlFile = new File(filePath);
-        // Ensure the file exists and is a file before attempting to parse
         if (!xmlFile.exists() || !xmlFile.isFile()) {
             System.err.println("  Skipping: File not found or is not a file: " + filePath);
             return;
@@ -53,12 +93,28 @@ public class PainXmlUpdater {
         DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
         DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
         Document doc = dBuilder.parse(xmlFile);
-        doc.getDocumentElement().normalize(); // Normalize the document to remove empty text nodes
-
-        // Generate base Message ID, unique for each file processing run
-        String baseMessageId = "INST" + LocalDateTime.now().format(MSG_ID_TIMESTAMP_FORMATTER);
+        doc.getDocumentElement().normalize();
 
         System.out.println("\n--- Processing file: " + xmlFile.getName() + " ---");
+
+        // --- NEW RULE: Check for existing IBANs and skip the ENTIRE file if found ---
+        if (hasExistingIban(doc)) {
+            System.out.println("  Skipping file '" + xmlFile.getName() + "' because one or more <IBAN> tags already contain values.");
+            return; // Skip all further processing for this file
+        }
+        // --- End NEW IBAN Check ---
+
+        // --- CONFIGURATION AREA 2: Message ID (<MsgId>) Generation ---
+        // This line defines the format of your Message ID.
+        String baseMessageId = "INST" + LocalDateTime.now().format(MSG_ID_TIMESTAMP_FORMATTER) +
+                               String.format("%04d", RANDOM.nextInt(10000)); // Current: INST + YYYYMMDDHHMMSS + 4-digit random (0000-9999)
+        /*
+         * Customization for MsgId:
+         * - To change the fixed prefix: Modify "INST".
+         * - To change timestamp format: Adjust MSG_ID_TIMESTAMP_FORMATTER pattern at the top of the class.
+         * - To change random suffix length (e.g., 5 digits):
+         * Change "%04d" to "%05d" AND change RANDOM.nextInt(10000) to RANDOM.nextInt(100000).
+         */
 
         // 1. Update Message ID (<MsgId>)
         NodeList msgIdNodes = doc.getElementsByTagName("MsgId");
@@ -90,9 +146,10 @@ public class PainXmlUpdater {
         }
 
         // 2. Update Payment Information ID (<PmtInfId>) and 3. Update Instruction ID (<InstrId>) & End-to-End ID (<EndToEndId>)
+        // Also: NEW: Populate empty IBAN based on DbtrAgt BIC
         NodeList pmtInfNodes = doc.getElementsByTagName("PmtInf");
         if (pmtInfNodes.getLength() == 0) {
-            System.out.println("  PmtInf tag not found. Skipping PmtInfId, InstrId, EndToEndId updates.");
+            System.out.println("  PmtInf tag not found. Skipping PmtInfId, InstrId, EndToEndId, and IBAN updates.");
         }
 
         for (int i = 0; i < pmtInfNodes.getLength(); i++) {
@@ -107,10 +164,9 @@ public class PainXmlUpdater {
                     pmtInfIdNodes.item(0).setTextContent(pmtInfId);
                     System.out.println("  Updated PmtInfId for batch " + (i + 1) + " to: " + pmtInfId);
 
-                    // Update InstrId and EndToEndId within this PmtInf block
                     NodeList cdtTrfTxInfNodes = pmtInfElement.getElementsByTagName("CdtTrfTxInf");
                     if (cdtTrfTxInfNodes.getLength() == 0) {
-                        System.out.println("    CdtTrfTxInf tag not found within this PmtInf. Skipping InstrId, EndToEndId updates for this batch.");
+                        System.out.println("    CdtTrfTxInf tag not found within this PmtInf. Skipping related updates for this batch.");
                     }
                     for (int j = 0; j < cdtTrfTxInfNodes.getLength(); j++) {
                         Node cdtTrfTxInfNode = cdtTrfTxInfNodes.item(j);
@@ -136,6 +192,51 @@ public class PainXmlUpdater {
                             } else {
                                 System.out.println("    EndToEndId tag not found for transaction " + (j + 1) + ".");
                             }
+
+                            // --- NEW: Populate empty IBAN based on DbtrAgt BIC ---
+                            // Assumes IBAN is under <DbtrAcct>/<Id>/<IBAN>
+                            NodeList dbtrAgtNodes = cdtTrfTxInfElement.getElementsByTagName("DbtrAgt");
+                            NodeList dbtrAcctNodes = cdtTrfTxInfElement.getElementsByTagName("DbtrAcct");
+
+                            if (dbtrAgtNodes.getLength() > 0 && dbtrAcctNodes.getLength() > 0) {
+                                Element dbtrAgtElement = (Element) dbtrAgtNodes.item(0);
+                                NodeList bicNodes = dbtrAgtElement.getElementsByTagName("BIC");
+                                
+                                Element dbtrAcctElement = (Element) dbtrAcctNodes.item(0);
+                                NodeList idNodes = dbtrAcctElement.getElementsByTagName("Id");
+                                Element idElement = null;
+                                if (idNodes.getLength() > 0 && idNodes.item(0).getNodeType() == Node.ELEMENT_NODE) {
+                                    idElement = (Element) idNodes.item(0);
+                                }
+
+                                if (bicNodes.getLength() > 0 && idElement != null) {
+                                    String bicValue = bicNodes.item(0).getTextContent();
+                                    NodeList ibanInIdNodes = idElement.getElementsByTagName("IBAN");
+                                    
+                                    if (ibanInIdNodes.getLength() > 0) {
+                                        Element ibanElement = (Element) ibanInIdNodes.item(0);
+                                        // Condition: IBAN is empty (should always be true due to file-level skip, but good for robustness)
+                                        if (ibanElement.getTextContent() == null || ibanElement.getTextContent().trim().isEmpty()) {
+                                            String mappedIban = BIC_IBAN_MAP.get(bicValue);
+                                            if (mappedIban != null) {
+                                                ibanElement.setTextContent(mappedIban);
+                                                System.out.println("      Populated IBAN: " + mappedIban + " for BIC: " + bicValue + " (Tx " + (j+1) + ")");
+                                            } else {
+                                                System.out.println("      No IBAN mapping found for BIC: " + bicValue + " (Tx " + (j+1) + ")");
+                                            }
+                                        } else {
+                                            System.out.println("      IBAN already present for transaction " + (j + 1) + ". No change made (should have been skipped at file level).");
+                                        }
+                                    } else {
+                                        System.out.println("      <IBAN> tag not found under <DbtrAcct>/<Id> for transaction " + (j + 1) + ".");
+                                    }
+                                } else {
+                                    System.out.println("      <BIC> or <DbtrAcct>/<Id> not found for transaction " + (j + 1) + ".");
+                                }
+                            } else {
+                                System.out.println("    <DbtrAgt> or <DbtrAcct> not found for transaction " + (j + 1) + ". Skipping IBAN population.");
+                            }
+                            // --- End NEW IBAN Population ---
                         }
                     }
                 } else {
@@ -200,37 +301,43 @@ public class PainXmlUpdater {
         String newFileName = "INST" + originalFileName;
         Path newFilePath = Paths.get(xmlFile.getParent(), newFileName);
 
-        // CORRECTED: Removed try-with-resources for StreamResult
         StreamResult result = new StreamResult(newFilePath.toFile());
         transformer.transform(source, result);
         System.out.println("Successfully updated and saved file to: " + newFilePath.toAbsolutePath());
-
-
-        // Optional: Delete original file. Use with caution!
-        // try {
-        //     Files.delete(xmlFile.toPath());
-        //     System.out.println("  Original file deleted: " + filePath);
-        // } catch (IOException e) {
-        //     System.err.println("  Failed to delete original file " + filePath + ": " + e.getMessage());
-        // }
     }
 
     public static void main(String[] args) {
-        // --- Configuration for Scenario 2 ---
-        // IMPORTANT: Replace with the actual path to your directory containing pain XML files
-        String directoryPath = "C:\\Your\\Path\\To\\PainFiles"; // Example for Windows. Use "/home/user/PainFiles" for Linux/macOS
+        // --- CONFIGURATION AREA 3: Main Program Settings ---
+
+        /**
+         * 1. directoryPath: The absolute path to the folder containing your pain XML files.
+         * - IMPORTANT: Replace "C:\\Your\\Path\\To\\PainFiles" with your actual directory path.
+         * - Use double backslashes (\\) for Windows paths (e.g., "D:\\XML_Input_Files").
+         * - Use forward slashes (/) for Linux/macOS paths (e.g., "/home/user/my_xmls").
+         */
+        String directoryPath = "C:\\Your\\Path\\To\\PainFiles"; // <--- CHANGE THIS LINE
+
+        /**
+         * 2. addTownName: Set to 'true' to add the <TwnNm> tag; 'false' to skip adding it.
+         */
+        boolean addTownName = true; // <--- CHANGE THIS LINE to true or false
         
-        // Flags for additional requirements
-        boolean addTownName = true;   // Set to true to add TwnNm, false otherwise
-        String townNameToAdd = "Pune"; // Town name to be added if addTownName is true
-        boolean removeAdrTp = true;   // Set to true to remove AdrTp, false otherwise
-        // --- End Configuration ---
+        /**
+         * 3. townNameToAdd: The specific town name string to insert if 'addTownName' is true.
+         * This is set to "Pune" by default, as per your previous mention.
+         */
+        String townNameToAdd = "Pune"; // <--- CHANGE THIS LINE to your desired town name
+        
+        /**
+         * 4. removeAdrTp: Set to 'true' to remove the <AdrTp> tag; 'false' to keep it.
+         */
+        boolean removeAdrTp = true;   // <--- CHANGE THIS LINE to true or false
+        // --- END CONFIGURATION AREA 3 ---
 
         PainXmlUpdater updater = new PainXmlUpdater();
-
         File folder = new File(directoryPath);
 
-        // Check if the directory exists and is actually a directory
+        // Basic directory validation
         if (!folder.exists()) {
             System.err.println("Error: Directory does not exist: " + directoryPath);
             return;
@@ -240,7 +347,7 @@ public class PainXmlUpdater {
             return;
         }
 
-        File[] listOfFiles = folder.listFiles(); // Get all files and directories in the folder
+        File[] listOfFiles = folder.listFiles();
 
         if (listOfFiles == null || listOfFiles.length == 0) {
             System.out.println("No files found in the directory: " + directoryPath);
@@ -250,22 +357,22 @@ public class PainXmlUpdater {
         System.out.println("Starting to process files in directory: " + directoryPath);
 
         for (File file : listOfFiles) {
-            // Check if it's a file (not a subdirectory) and if its extension matches expected XML-like types
+            // Process files with .xml, .txt, or .bsi extensions (case-insensitive)
             if (file.isFile() && 
                 (file.getName().toLowerCase().endsWith(".xml") || 
                  file.getName().toLowerCase().endsWith(".txt") || 
-                 file.getName().toLowerCase().endsWith(".bsi"))) { // Check for .xml, .txt, .bsi extensions
+                 file.getName().toLowerCase().endsWith(".bsi"))) {
                 
                 try {
                     updater.updatePainXmlFile(file.getAbsolutePath(), addTownName, townNameToAdd, removeAdrTp);
                 } catch (ParserConfigurationException | IOException | SAXException | TransformerException e) {
                     System.err.println("!!! Critical Error processing file " + file.getName() + ": " + e.getMessage());
-                    // e.printStackTrace(); // Uncomment for full stack trace for detailed debugging
+                    // e.printStackTrace(); // Uncomment this line for a full stack trace for detailed debugging
                 }
             } else {
                 System.out.println("Skipping non-XML or unsupported file type: " + file.getName());
             }
         }
-        System.out.println("\n--- All files processed. ---");
+        System.out.println("\n--- All eligible files processed. ---");
     }
 }
