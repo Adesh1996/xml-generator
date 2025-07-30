@@ -15,7 +15,6 @@ import javax.xml.transform.dom.DOMSource;
 import javax.xml.transform.stream.StreamResult;
 import java.io.File;
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.LocalDateTime;
@@ -33,13 +32,10 @@ public class PainXmlUpdater {
     private static final Random RANDOM = new Random(); // For generating random numbers
 
     // --- CONFIGURATION AREA 1: BIC to IBAN Mapping ---
-    // Populate this map with your specific BIC to IBAN key-value pairs.
-    // Key: BIC Value (e.g., from <DbtrAgt> BIC)
-    // Value: Corresponding IBAN to set
     private static final Map<String, String> BIC_IBAN_MAP = new HashMap<>();
 
     static {
-        // Add your mappings here. These are just examples.
+        // Add your BIC to IBAN entries here. These are examples.
         BIC_IBAN_MAP.put("DEUTDEFFXXX", "DE89370400440532013000"); // Example: Deutsche Bank BIC -> IBAN
         BIC_IBAN_MAP.put("CHASUS33XXX", "US12345678901234567890"); // Example: JP Morgan Chase BIC -> IBAN
         BIC_IBAN_MAP.put("CITIUS33XXX", "US09876543210987654321"); // Example: Citibank BIC -> IBAN
@@ -49,7 +45,6 @@ public class PainXmlUpdater {
 
     /**
      * Helper method to check if any <IBAN> tag in the document already has a value.
-     * This is used to implement the "skip file if IBAN is already present" requirement.
      *
      * @param doc The XML Document to check.
      * @return true if any <IBAN> tag contains non-empty text, false otherwise.
@@ -60,13 +55,12 @@ public class PainXmlUpdater {
             Node ibanNode = ibanNodes.item(i);
             if (ibanNode.getNodeType() == Node.ELEMENT_NODE) {
                 Element ibanElement = (Element) ibanNode;
-                // Check if the IBAN element has any text content that is not just whitespace
                 if (ibanElement.getTextContent() != null && !ibanElement.getTextContent().trim().isEmpty()) {
-                    return true; // Found an IBAN that is not empty
+                    return true;
                 }
             }
         }
-        return false; // No non-empty IBAN tags found
+        return false;
     }
 
     /**
@@ -105,16 +99,10 @@ public class PainXmlUpdater {
         // --- End NEW IBAN Check ---
 
         // --- CONFIGURATION AREA 2: Message ID (<MsgId>) Generation ---
-        // This line defines the format of your Message ID.
         String baseMessageId = "INST" + LocalDateTime.now().format(MSG_ID_TIMESTAMP_FORMATTER) +
-                               String.format("%04d", RANDOM.nextInt(10000)); // Current: INST + YYYYMMDDHHMMSS + 4-digit random (0000-9999)
-        /*
-         * Customization for MsgId:
-         * - To change the fixed prefix: Modify "INST".
-         * - To change timestamp format: Adjust MSG_ID_TIMESTAMP_FORMATTER pattern at the top of the class.
-         * - To change random suffix length (e.g., 5 digits):
-         * Change "%04d" to "%05d" AND change RANDOM.nextInt(10000) to RANDOM.nextInt(100000).
-         */
+                               String.format("%04d", RANDOM.nextInt(10000));
+        /* Customization notes for MsgId are in previous responses */
+
 
         // 1. Update Message ID (<MsgId>)
         NodeList msgIdNodes = doc.getElementsByTagName("MsgId");
@@ -146,10 +134,10 @@ public class PainXmlUpdater {
         }
 
         // 2. Update Payment Information ID (<PmtInfId>) and 3. Update Instruction ID (<InstrId>) & End-to-End ID (<EndToEndId>)
-        // Also: NEW: Populate empty IBAN based on DbtrAgt BIC
+        // Also: Populate empty IBAN based on DbtrAgt BIC, and NEW: Update specific BIC only within DbtrAgt
         NodeList pmtInfNodes = doc.getElementsByTagName("PmtInf");
         if (pmtInfNodes.getLength() == 0) {
-            System.out.println("  PmtInf tag not found. Skipping PmtInfId, InstrId, EndToEndId, and IBAN updates.");
+            System.out.println("  PmtInf tag not found. Skipping PmtInfId, InstrId, EndToEndId, and BIC/IBAN updates.");
         }
 
         for (int i = 0; i < pmtInfNodes.getLength(); i++) {
@@ -193,14 +181,42 @@ public class PainXmlUpdater {
                                 System.out.println("    EndToEndId tag not found for transaction " + (j + 1) + ".");
                             }
 
-                            // --- NEW: Populate empty IBAN based on DbtrAgt BIC ---
-                            // Assumes IBAN is under <DbtrAcct>/<Id>/<IBAN>
+                            // --- NEW REQUIREMENT: Update specific wrong BIC values ONLY in DbtrAgt ---
+                            final String OLD_BIC_TO_REPLACE = "BPLCESMM";
+                            final String NEW_BIC_VALUE = "BARCDEFF";
+                            boolean transactionBicUpdated = false;
+
                             NodeList dbtrAgtNodes = cdtTrfTxInfElement.getElementsByTagName("DbtrAgt");
+                            if (dbtrAgtNodes.getLength() > 0) {
+                                Element dbtrAgtElement = (Element) dbtrAgtNodes.item(0);
+                                NodeList finInstnIdNodes = dbtrAgtElement.getElementsByTagName("FinInstnId");
+                                if (finInstnIdNodes.getLength() > 0) {
+                                    Element finInstnIdElement = (Element) finInstnIdNodes.item(0);
+                                    NodeList bicNodesInDbtrAgt = finInstnIdElement.getElementsByTagName("BIC"); // Get BIC specifically here
+                                    
+                                    if (bicNodesInDbtrAgt.getLength() > 0) {
+                                        Element bicElement = (Element) bicNodesInDbtrAgt.item(0);
+                                        if (OLD_BIC_TO_REPLACE.equals(bicElement.getTextContent())) {
+                                            bicElement.setTextContent(NEW_BIC_VALUE);
+                                            System.out.println("      Updated DbtrAgt BIC from '" + OLD_BIC_TO_REPLACE + "' to '" + NEW_BIC_VALUE + "' for Tx " + (j + 1) + ".");
+                                            transactionBicUpdated = true;
+                                        }
+                                    }
+                                }
+                            }
+                            if (!transactionBicUpdated) {
+                                System.out.println("      No DbtrAgt BIC '" + OLD_BIC_TO_REPLACE + "' found for replacement in Tx " + (j + 1) + ".");
+                            }
+                            // --- END NEW BIC Update in DbtrAgt ---
+
+
+                            // Populate empty IBAN based on DbtrAgt BIC (this will use the potentially updated BIC)
                             NodeList dbtrAcctNodes = cdtTrfTxInfElement.getElementsByTagName("DbtrAcct");
 
                             if (dbtrAgtNodes.getLength() > 0 && dbtrAcctNodes.getLength() > 0) {
                                 Element dbtrAgtElement = (Element) dbtrAgtNodes.item(0);
-                                NodeList bicNodes = dbtrAgtElement.getElementsByTagName("BIC");
+                                // Re-get BIC as it might have just been updated
+                                NodeList currentDbtrAgtBicNodes = dbtrAgtElement.getElementsByTagName("BIC"); 
                                 
                                 Element dbtrAcctElement = (Element) dbtrAcctNodes.item(0);
                                 NodeList idNodes = dbtrAcctElement.getElementsByTagName("Id");
@@ -209,13 +225,12 @@ public class PainXmlUpdater {
                                     idElement = (Element) idNodes.item(0);
                                 }
 
-                                if (bicNodes.getLength() > 0 && idElement != null) {
-                                    String bicValue = bicNodes.item(0).getTextContent();
+                                if (currentDbtrAgtBicNodes.getLength() > 0 && idElement != null) {
+                                    String bicValue = currentDbtrAgtBicNodes.item(0).getTextContent();
                                     NodeList ibanInIdNodes = idElement.getElementsByTagName("IBAN");
                                     
                                     if (ibanInIdNodes.getLength() > 0) {
                                         Element ibanElement = (Element) ibanInIdNodes.item(0);
-                                        // Condition: IBAN is empty (should always be true due to file-level skip, but good for robustness)
                                         if (ibanElement.getTextContent() == null || ibanElement.getTextContent().trim().isEmpty()) {
                                             String mappedIban = BIC_IBAN_MAP.get(bicValue);
                                             if (mappedIban != null) {
@@ -236,7 +251,6 @@ public class PainXmlUpdater {
                             } else {
                                 System.out.println("    <DbtrAgt> or <DbtrAcct> not found for transaction " + (j + 1) + ". Skipping IBAN population.");
                             }
-                            // --- End NEW IBAN Population ---
                         }
                     }
                 } else {
@@ -259,7 +273,7 @@ public class PainXmlUpdater {
                     if (pstlAdrNodes.getLength() > 0) {
                         Element pstlAdrElement = (Element) pstlAdrNodes.item(0);
                         NodeList twnNmNodes = pstlAdrElement.getElementsByTagName("TwnNm");
-                        if (twnNmNodes.getLength() == 0) { // Add only if not already present
+                        if (twnNmNodes.getLength() == 0) {
                             Element twnNmElement = doc.createElement("TwnNm");
                             twnNmElement.setTextContent(townName);
                             pstlAdrElement.appendChild(twnNmElement);
@@ -280,7 +294,6 @@ public class PainXmlUpdater {
             if (adrTpNodes.getLength() == 0) {
                 System.out.println("  AdrTp tag not found. No tags to remove.");
             }
-            // Iterate backwards because removing nodes changes the NodeList dynamically
             for (int i = adrTpNodes.getLength() - 1; i >= 0; i--) {
                 Node adrTpNode = adrTpNodes.item(i);
                 if (adrTpNode.getParentNode() != null) {
@@ -293,7 +306,7 @@ public class PainXmlUpdater {
         // Save the modified document
         TransformerFactory transformerFactory = TransformerFactory.newInstance();
         Transformer transformer = transformerFactory.newTransformer();
-        transformer.setOutputProperty(OutputKeys.INDENT, "yes"); // For pretty printing
+        transformer.setOutputProperty(OutputKeys.INDENT, "yes");
         DOMSource source = new DOMSource(doc);
 
         // 6. Rename the file with prefix INST
@@ -324,7 +337,6 @@ public class PainXmlUpdater {
         
         /**
          * 3. townNameToAdd: The specific town name string to insert if 'addTownName' is true.
-         * This is set to "Pune" by default, as per your previous mention.
          */
         String townNameToAdd = "Pune"; // <--- CHANGE THIS LINE to your desired town name
         
